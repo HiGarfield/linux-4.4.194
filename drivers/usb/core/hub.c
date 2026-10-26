@@ -4756,7 +4756,6 @@ static int descriptors_changed(struct usb_device *udev,
 		struct usb_device_descriptor *old_device_descriptor,
 		struct usb_host_bos *old_bos)
 {
-	int		changed = 0;
 	unsigned	index;
 	unsigned	serial_len = 0;
 	unsigned	len;
@@ -4764,18 +4763,40 @@ static int descriptors_changed(struct usb_device *udev,
 	int		length;
 	char		*buf;
 
-	if (memcmp(&udev->descriptor, old_device_descriptor,
-			sizeof(*old_device_descriptor)) != 0)
+	/*
+	 * After a port reset the descriptors are re-read over a link that
+	 * has just been (re)trained, which is exactly when those reads are
+	 * least reliable.  Only the identity fields - idVendor, idProduct
+	 * and bcdDevice - say whether the device on the port is still the
+	 * same one, so only they may decide whether to tear it down.
+	 * Everything else is reported but never acted on: a SuperSpeed
+	 * disk behind a hub on MT7621 keeps its identity across the reset
+	 * while its configuration descriptor reads back shorter, and
+	 * tearing it down there drops the disk, fails all in-flight I/O
+	 * and aborts the filesystem journal - far worse than keeping a
+	 * working device whose descriptors did not read back identically.
+	 */
+	if (udev->descriptor.idVendor != old_device_descriptor->idVendor ||
+	    udev->descriptor.idProduct != old_device_descriptor->idProduct ||
+	    udev->descriptor.bcdDevice != old_device_descriptor->bcdDevice)
 		return 1;
 
+	if (memcmp(&udev->descriptor, old_device_descriptor,
+			sizeof(*old_device_descriptor)) != 0)
+		dev_info(&udev->dev,
+			 "device descriptor read mismatch after reset,"
+			 " identity unchanged\n");
+
 	if ((old_bos && !udev->bos) || (!old_bos && udev->bos))
-		return 1;
-	if (udev->bos) {
+		dev_info(&udev->dev, "BOS descriptor mismatch after reset\n");
+	else if (udev->bos && old_bos) {
 		len = le16_to_cpu(udev->bos->desc->wTotalLength);
 		if (len != le16_to_cpu(old_bos->desc->wTotalLength))
-			return 1;
-		if (memcmp(udev->bos->desc, old_bos->desc, len))
-			return 1;
+			dev_info(&udev->dev,
+				 "BOS length changed after reset\n");
+		else if (memcmp(udev->bos->desc, old_bos->desc, len))
+			dev_info(&udev->dev,
+				 "BOS content changed after reset\n");
 	}
 
 	/* Since the idVendor, idProduct, and bcdDevice values in the
@@ -4795,46 +4816,44 @@ static int descriptors_changed(struct usb_device *udev,
 
 	buf = kmalloc(len, GFP_NOIO);
 	if (buf == NULL) {
-		dev_err(&udev->dev, "no mem to re-read configs after reset\n");
-		/* assume the worst */
-		return 1;
+		/* The identity already matched above; report and keep. */
+		dev_info(&udev->dev, "no mem to re-read configs after reset\n");
+		return 0;
 	}
 	for (index = 0; index < udev->descriptor.bNumConfigurations; index++) {
 		old_length = le16_to_cpu(udev->config[index].desc.wTotalLength);
 		length = usb_get_descriptor(udev, USB_DT_CONFIG, index, buf,
 				old_length);
 		if (length != old_length) {
-			dev_dbg(&udev->dev, "config index %d, error %d\n",
-					index, length);
-			changed = 1;
+			dev_info(&udev->dev,
+				 "config index %d read %d of %u bytes\n",
+				 index, length, old_length);
 			break;
 		}
 		if (memcmp(buf, udev->rawdescriptors[index], old_length)
 				!= 0) {
-			dev_dbg(&udev->dev, "config index %d changed (#%d)\n",
+			dev_info(&udev->dev, "config index %d changed (#%d)\n",
 				index,
 				((struct usb_config_descriptor *) buf)->
 					bConfigurationValue);
-			changed = 1;
 			break;
 		}
 	}
 
-	if (!changed && serial_len) {
+	if (serial_len) {
 		length = usb_string(udev, udev->descriptor.iSerialNumber,
 				buf, serial_len);
 		if (length + 1 != serial_len) {
-			dev_dbg(&udev->dev, "serial string error %d\n",
-					length);
-			changed = 1;
+			dev_info(&udev->dev,
+				 "serial string read %d of %u bytes\n",
+				 length, serial_len - 1);
 		} else if (memcmp(buf, udev->serial, length) != 0) {
-			dev_dbg(&udev->dev, "serial string changed\n");
-			changed = 1;
+			dev_info(&udev->dev, "serial string changed\n");
 		}
 	}
 
 	kfree(buf);
-	return changed;
+	return 0;
 }
 
 static void hub_port_connect(struct usb_hub *hub, int port1, u16 portstatus,
