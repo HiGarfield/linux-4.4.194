@@ -2872,6 +2872,33 @@ static void queue_trb(struct xhci_hcd *xhci, struct xhci_ring *ring,
 	trb->field[0] = cpu_to_le32(field1);
 	trb->field[1] = cpu_to_le32(field2);
 	trb->field[2] = cpu_to_le32(field3);
+
+	/*
+	 * The controller starts parsing a TRB as soon as its cycle bit is
+	 * set, even if the driver has not finished writing it yet.  The
+	 * chunk holding the cycle bit (field[3]) is written last, but on
+	 * weakly ordered memory systems - such as the MIPS cores in MT7621
+	 * - the stores are not guaranteed to complete in program order, so
+	 * the xHC can fetch a TRB whose cycle bit is valid while the other
+	 * fields still contain stale data.
+	 *
+	 * A half-written command TRB is the dangerous case.  Set TR Dequeue
+	 * Pointer, Stop/Reset Endpoint, Configure Endpoint and friends are
+	 * queued back to back while the controller is still working through
+	 * the previous command; error recovery, device reset and
+	 * re-enumeration all do exactly that under load.  The controller
+	 * then executes a command built from garbage, which shows up as
+	 * "Mismatch between completed Set TR Deq Ptr command & xHCI internal
+	 * state", can move an endpoint ring's dequeue pointer to a bogus
+	 * address, and can even make the host controller DMA from wild
+	 * memory (Host System Error).  The endpoint ring is left
+	 * desynchronized, every following bulk URB fails, and usb-storage
+	 * escalates to a full USB device reset - the reset storm seen on
+	 * MT7621 under heavy I/O.  A write barrier before the cycle bit
+	 * guarantees the whole TRB is visible to the controller before it
+	 * may be consumed.
+	 */
+	wmb();
 	trb->field[3] = cpu_to_le32(field4);
 	inc_enq(xhci, ring, more_trbs_coming);
 }
