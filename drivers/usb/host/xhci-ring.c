@@ -1150,6 +1150,10 @@ static void xhci_handle_cmd_reset_ep(struct xhci_hcd *xhci, int slot_id,
 		/* Clear our internal halted state */
 		xhci->devs[slot_id]->eps[ep_index].ep_state &= ~EP_HALTED;
 	}
+
+	/* Restart the preserved TD after a soft reset. */
+	if (le32_to_cpu(trb->generic.field[3]) & TRB_TSP)
+		ring_doorbell_for_active_rings(xhci, slot_id, ep_index);
 }
 
 static void xhci_handle_cmd_enable_slot(struct xhci_hcd *xhci, int slot_id,
@@ -1784,7 +1788,8 @@ struct xhci_segment *trb_in_td(struct xhci_hcd *xhci,
 
 static int xhci_cleanup_halted_endpoint(struct xhci_hcd *xhci,
 		unsigned int slot_id, unsigned int ep_index,
-		unsigned int stream_id, struct xhci_td *td)
+		unsigned int stream_id, struct xhci_td *td,
+		enum xhci_ep_reset_type reset_type)
 {
 	struct xhci_virt_ep *ep = &xhci->devs[slot_id]->eps[ep_index];
 	struct xhci_command *command;
@@ -1799,7 +1804,8 @@ static int xhci_cleanup_halted_endpoint(struct xhci_hcd *xhci,
 	ep->ep_state |= EP_HALTED;
 	ep->stopped_stream = stream_id;
 
-	ret = xhci_queue_reset_ep(xhci, command, slot_id, ep_index);
+	ret = xhci_queue_reset_ep(xhci, command, slot_id, ep_index,
+			reset_type);
 	if (ret < 0) {
 		if (!was_halted)
 			ep->ep_state &= ~EP_HALTED;
@@ -1808,7 +1814,9 @@ static int xhci_cleanup_halted_endpoint(struct xhci_hcd *xhci,
 		return ret;
 	}
 
-	xhci_cleanup_stalled_ring(xhci, ep_index, td);
+	/* A soft reset preserves the TD for retry; a hard reset drops it. */
+	if (reset_type == EP_HARD_RESET)
+		xhci_cleanup_stalled_ring(xhci, ep_index, td);
 
 	ep->stopped_stream = 0;
 
@@ -1904,7 +1912,7 @@ static int finish_td(struct xhci_hcd *xhci, struct xhci_td *td,
 		 * The class driver clears the device side halt later.
 		 */
 		xhci_cleanup_halted_endpoint(xhci, slot_id, ep_index,
-					ep_ring->stream_id, td);
+					ep_ring->stream_id, td, EP_HARD_RESET);
 	} else {
 		/* Update ring dequeue pointer */
 		while (ep_ring->dequeue != td->last_trb)
@@ -2202,6 +2210,8 @@ static int process_bulk_intr_td(struct xhci_hcd *xhci, struct xhci_td *td,
 	struct xhci_ring *ep_ring;
 	union xhci_trb *cur_trb;
 	struct xhci_segment *cur_seg;
+	struct xhci_slot_ctx *slot_ctx;
+	unsigned int slot_id, ep_index;
 	u32 trb_comp_code;
 
 	ep_ring = xhci_dma_to_transfer_ring(ep, le64_to_cpu(event->buffer));
@@ -2209,6 +2219,7 @@ static int process_bulk_intr_td(struct xhci_hcd *xhci, struct xhci_td *td,
 
 	switch (trb_comp_code) {
 	case COMP_SUCCESS:
+		ep_ring->err_count = 0;
 		/* Double check that the HW transferred everything. */
 		if (event_trb != td->last_trb ||
 		    EVENT_TRB_LEN(le32_to_cpu(event->transfer_len)) != 0) {
@@ -2231,6 +2242,34 @@ static int process_bulk_intr_td(struct xhci_hcd *xhci, struct xhci_td *td,
 		else
 			*status = 0;
 		break;
+	case COMP_TX_ERR:
+		/*
+		 * Clear the host-side halt but preserve the TD so the xHC
+		 * can retry it. Give up when retrying is unsafe or exhausted.
+		 */
+		slot_id = TRB_TO_SLOT_ID(le32_to_cpu(event->flags));
+		ep_index = TRB_TO_EP_ID(le32_to_cpu(event->flags)) - 1;
+		if (xhci->xhc_state & (XHCI_STATE_DYING |
+					XHCI_STATE_REMOVING |
+					XHCI_STATE_HALTED))
+			break;
+		if (td->urb->dev->state == USB_STATE_NOTATTACHED)
+			break;
+		if (ep->ep_state & (EP_HALTED | EP_HALT_PENDING |
+				SET_DEQ_PENDING))
+			return 0;
+
+		slot_ctx = xhci_get_slot_ctx(xhci,
+				xhci->devs[slot_id]->out_ctx);
+		if ((xhci->quirks & XHCI_RESET_EP_QUIRK) ||
+				(ep_ring->err_count++ >= MAX_SOFT_RETRY) ||
+				(le32_to_cpu(slot_ctx->tt_info) & TT_SLOT))
+			break;
+		if (xhci_cleanup_halted_endpoint(xhci, slot_id, ep_index,
+				ep_ring->stream_id, td, EP_SOFT_RESET) < 0)
+			break;
+		*status = 0;
+		return 0;
 	default:
 		/* Others already handled above */
 		break;
@@ -4280,11 +4319,15 @@ void xhci_queue_new_dequeue_state(struct xhci_hcd *xhci,
 }
 
 int xhci_queue_reset_ep(struct xhci_hcd *xhci, struct xhci_command *cmd,
-			int slot_id, unsigned int ep_index)
+		int slot_id, unsigned int ep_index,
+		enum xhci_ep_reset_type reset_type)
 {
 	u32 trb_slot_id = SLOT_ID_FOR_TRB(slot_id);
 	u32 trb_ep_index = EP_ID_FOR_TRB(ep_index);
 	u32 type = TRB_TYPE(TRB_RESET_EP);
+
+	if (reset_type == EP_SOFT_RESET)
+		type |= TRB_TSP;
 
 	return queue_command(xhci, cmd, 0, 0, 0,
 			trb_slot_id | trb_ep_index | type, false);

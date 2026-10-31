@@ -1270,6 +1270,13 @@ union xhci_trb {
 #define TRB_EVAL_CONTEXT	13
 /* Reset Endpoint Command */
 #define TRB_RESET_EP		14
+/* Transfer State Preserve bit of a Reset Endpoint Command */
+#define TRB_TSP			(1 << 9)
+
+enum xhci_ep_reset_type {
+	EP_HARD_RESET,
+	EP_SOFT_RESET,
+};
 /* Stop Transfer Ring Command */
 #define TRB_STOP_RING		15
 /* Set Transfer Ring Dequeue Pointer Command */
@@ -1380,6 +1387,9 @@ enum xhci_ring_type {
 	TYPE_EVENT,
 };
 
+/* Maximum number of soft retries after consecutive transaction errors. */
+#define MAX_SOFT_RETRY		3
+
 struct xhci_ring {
 	struct xhci_segment	*first_seg;
 	struct xhci_segment	*last_seg;
@@ -1402,6 +1412,7 @@ struct xhci_ring {
 	unsigned int		num_trbs_free_temp;
 	enum xhci_ring_type	type;
 	bool			last_td_was_short;
+	unsigned int		err_count;
 	struct radix_tree_root	*trb_address_map;
 };
 
@@ -1905,7 +1916,8 @@ int xhci_queue_configure_endpoint(struct xhci_hcd *xhci,
 int xhci_queue_evaluate_context(struct xhci_hcd *xhci, struct xhci_command *cmd,
 		dma_addr_t in_ctx_ptr, u32 slot_id, bool command_must_succeed);
 int xhci_queue_reset_ep(struct xhci_hcd *xhci, struct xhci_command *cmd,
-		int slot_id, unsigned int ep_index);
+		int slot_id, unsigned int ep_index,
+		enum xhci_ep_reset_type reset_type);
 int xhci_queue_reset_device(struct xhci_hcd *xhci, struct xhci_command *cmd,
 		u32 slot_id);
 void xhci_find_new_dequeue_state(struct xhci_hcd *xhci,
