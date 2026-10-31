@@ -29,7 +29,7 @@
 #define FS_PAYLOAD_MAX 188
 
 /* mtk scheduler bitmasks */
-#define EP_BPKTS(p)	((p) & 0x3f)
+#define EP_BPKTS(p)	((p) & 0x7f)
 #define EP_BCSCOUNT(p)	(((p) & 0x7) << 8)
 #define EP_BBM(p)	((p) << 11)
 #define EP_BOFFSET(p)	((p) & 0x3fff)
