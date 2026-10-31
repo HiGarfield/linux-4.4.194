@@ -481,10 +481,15 @@ static void xhci_mtk_quirks(struct device *dev, struct xhci_hcd *xhci)
 		xhci->quirks |= XHCI_LPM_SUPPORT;
 
 	/*
-	 * MTK xHCI 0.96: PSA is 1 by default even if doesn't support stream,
-	 * and it's 3 when support it.
+	 * MTK xHCI 0.96 exposes broken stream support: the controller may
+	 * advertise a PSA/stream capability but mass-storage traffic behind a
+	 * USB3 hub still hits COMP_TX_ERR and repeated device resets.
+	 *
+	 * Force the generic broken-streams quirk for this generation so the
+	 * xHCI core never attempts bulk-stream scheduling on the affected
+	 * controller.
 	 */
-	if (xhci->hci_version < 0x100 && HCC_MAX_PSA(xhci->hcc_params) == 4)
+	if (xhci->hci_version < 0x100)
 		xhci->quirks |= XHCI_BROKEN_STREAMS;
 }
 
