@@ -375,7 +375,8 @@ int xhci_mtk_add_ep_quirk(struct usb_hcd *hcd, struct usb_device *udev,
 		 * resets.  Set the minimum required scheduling fields so the
 		 * controller can always schedule these endpoints correctly.
 		 */
-		if (udev->speed == USB_SPEED_SUPER &&
+		if (xhci->hci_version < 0x100 &&
+		    udev->speed == USB_SPEED_SUPER &&
 		    !usb_endpoint_xfer_isoc(&ep->desc) &&
 		    !usb_endpoint_xfer_int(&ep->desc)) {
 			u32 max_burst =
