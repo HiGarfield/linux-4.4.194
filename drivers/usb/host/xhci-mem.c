@@ -29,6 +29,9 @@
 #include "xhci.h"
 #include "xhci-trace.h"
 
+#define EP_BPKTS(p)	((p) & 0x7f)
+#define EP_BBM(p)	((p) << 11)
+
 /*
  * Allocates a generic ring segment from the ring pool, sets the dma address,
  * initializes the segment to zero, and sets the private next pointer to NULL.
@@ -1245,6 +1248,12 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 	/* EP 0 can handle "burst" sizes of 1, so Max Burst Size field is 0 */
 	ep0_ctx->ep_info2 |= cpu_to_le32(MAX_BURST(0) | ERROR_COUNT(3) |
 					 max_packets);
+
+	if (xhci->quirks & XHCI_MTK_HOST && xhci->hci_version < 0x100 &&
+	    udev->speed == USB_SPEED_SUPER) {
+		ep0_ctx->reserved[0] = cpu_to_le32(EP_BPKTS(1) | EP_BBM(1));
+		ep0_ctx->reserved[1] = 0;
+	}
 
 	ep0_ctx->deq = cpu_to_le64(dev->eps[0].ring->first_seg->dma |
 				   dev->eps[0].ring->cycle_state);
