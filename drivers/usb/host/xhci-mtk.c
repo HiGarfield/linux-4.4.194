@@ -464,6 +464,7 @@ static void xhci_mtk_quirks(struct device *dev, struct xhci_hcd *xhci)
 {
 	struct usb_hcd *hcd = xhci_to_hcd(xhci);
 	struct xhci_hcd_mtk *mtk = hcd_to_mtk(hcd);
+	bool is_mt7621 = IS_ENABLED(CONFIG_SOC_MT7621);
 
 	/*
 	 * As of now platform drivers don't provide MSI support so we ensure
@@ -477,7 +478,11 @@ static void xhci_mtk_quirks(struct device *dev, struct xhci_hcd *xhci)
 	 * short transfer. Ignore it.
 	 */
 	xhci->quirks |= XHCI_SPURIOUS_SUCCESS;
-	if (mtk->lpm_support)
+	/*
+	 * MT7621 may hit transfer/link instability with Hub + UAS stress load
+	 * when USB3 LPM is enabled. Keep U1/U2 disabled on this SoC.
+	 */
+	if (mtk->lpm_support && !is_mt7621)
 		xhci->quirks |= XHCI_LPM_SUPPORT;
 
 	/*
@@ -485,6 +490,10 @@ static void xhci_mtk_quirks(struct device *dev, struct xhci_hcd *xhci)
 	 * and it's 3 when support it.
 	 */
 	if (xhci->hci_version < 0x100 && HCC_MAX_PSA(xhci->hcc_params) == 4)
+		xhci->quirks |= XHCI_BROKEN_STREAMS;
+
+	/* Disable streams on MT7621 to avoid storage-path reset storms. */
+	if (is_mt7621)
 		xhci->quirks |= XHCI_BROKEN_STREAMS;
 }
 
@@ -770,6 +779,7 @@ static const struct dev_pm_ops xhci_mtk_pm_ops = {
 
 #ifdef CONFIG_OF
 static const struct of_device_id mtk_xhci_of_match[] = {
+	{ .compatible = "mediatek,mt7621-xhci"},
 	{ .compatible = "mediatek,mt8173-xhci"},
 	{ },
 };
