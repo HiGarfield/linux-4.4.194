@@ -2235,8 +2235,10 @@ static int process_bulk_intr_td(struct xhci_hcd *xhci, struct xhci_td *td,
 			*status = 0;
 		}
 		break;
-	case COMP_STOP_SHORT:
 	case COMP_SHORT_TX:
+		ep_ring->err_count = 0;
+		/* fall through */
+	case COMP_STOP_SHORT:
 		if (td->urb->transfer_flags & URB_SHORT_NOT_OK)
 			*status = -EREMOTEIO;
 		else
