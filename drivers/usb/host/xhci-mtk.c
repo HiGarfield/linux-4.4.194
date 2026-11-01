@@ -495,6 +495,14 @@ static void xhci_mtk_quirks(struct device *dev, struct xhci_hcd *xhci)
 	/* Disable streams on MT7621 to avoid storage-path reset storms. */
 	if (is_mt7621)
 		xhci->quirks |= XHCI_BROKEN_STREAMS;
+
+	/*
+	 * Force-disable USB3 U1/U2 timeout registers on MT7621.
+	 * Some parts still show unstable link transitions under sustained
+	 * traffic unless the root-port U1/U2 timers are explicitly cleared.
+	 */
+	if (is_mt7621)
+		xhci->quirks |= XHCI_MTK_DISABLE_U1U2;
 }
 
 /* called during probe() after chip reset completes */

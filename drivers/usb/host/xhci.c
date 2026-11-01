@@ -582,6 +582,21 @@ static int xhci_run_finished(struct xhci_hcd *xhci)
 	return 0;
 }
 
+static void xhci_disable_usb3_u1u2(struct xhci_hcd *xhci)
+{
+	__le32 __iomem **port_array = xhci->usb3_ports;
+	unsigned int i;
+	u32 temp;
+
+	for (i = 0; i < xhci->num_usb3_ports; i++) {
+		temp = readl(port_array[i] + PORTPMSC);
+		temp &= ~(PORT_U1_TIMEOUT_MASK | PORT_U2_TIMEOUT_MASK);
+		writel(temp, port_array[i] + PORTPMSC);
+		/* flush posted write */
+		readl(port_array[i] + PORTPMSC);
+	}
+}
+
 /*
  * Start the HC after it was halted.
  *
@@ -629,6 +644,9 @@ int xhci_run(struct usb_hcd *hcd)
 	temp_64 &= ~ERST_PTR_MASK;
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init,
 			"ERST deq = 64'h%0lx", (long unsigned int) temp_64);
+
+	if (xhci->quirks & XHCI_MTK_DISABLE_U1U2)
+		xhci_disable_usb3_u1u2(xhci);
 
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init,
 			"// Set the interrupt modulation register");
